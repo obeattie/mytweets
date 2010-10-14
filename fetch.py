@@ -1,19 +1,29 @@
 import warnings
 warnings.simplefilter('ignore', DeprecationWarning)
 
-import httplib2, urllib, time
+import urllib, time
 try:
     import json
 except ImportError:
     import simplejson as json
 
-from config import USERNAME, PASSWORD
+import oauth2 as oauth
+
+from config import CONSUMER_KEY, CONSUMER_SECRET, ACCESS_TOKEN, ACCESS_TOKEN_SECRET
 
 USER_TIMELINE = "http://twitter.com/statuses/user_timeline.json"
 FILE = "my_tweets.json"
 
-h = httplib2.Http()
-h.add_credentials(USERNAME, PASSWORD, 'twitter.com')
+# Configure an oauth client with the credentials
+oauth_consumer = oauth.Consumer(
+    key=CONSUMER_KEY,
+    secret=CONSUMER_SECRET
+)
+oauth_token = oauth.Token(
+    key=ACCESS_TOKEN,
+    secret=ACCESS_TOKEN_SECRET
+)
+h = oauth.Client(oauth_consumer, oauth_token)
 
 def load_all():
     try:
