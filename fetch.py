@@ -1,126 +1,125 @@
-#!/usr/bin/python
-import warnings
-warnings.simplefilter('ignore', DeprecationWarning)
+import urllib
 
-import httplib2, urllib, time, re
+import oauth2 as oauth
+
 try:
     import json
 except ImportError:
     import simplejson as json
 
-from config import USERNAME, PASSWORD
+from config import CONSUMER_KEY, CONSUMER_SECRET, ACCESS_TOKEN, ACCESS_TOKEN_SECRET
 
-USER_TIMELINE = "http://twitter.com/statuses/user_timeline.json"
-FILE = "my_tweets.json"
+TWEET_FILE = 'my_tweets.json'
+FAVES_FILE = 'my_faves.json'
+REPLY_FILE = 'my_mentions.json'
 
-h = httplib2.Http()
-h.add_credentials(USERNAME, PASSWORD, 'twitter.com')
+# Configure httplib with the credentials
+oauth_consumer = oauth.Consumer(
+    key=CONSUMER_KEY,
+    secret=CONSUMER_SECRET
+)
+oauth_token = oauth.Token(
+    key=ACCESS_TOKEN,
+    secret=ACCESS_TOKEN_SECRET
+)
+h = oauth.Client(oauth_consumer, oauth_token)
 
-def load_all():
+def sort_tweets(tweets):
+    """Sorts the passed tweets into reverse-chronological order (inferred by
+       the object ids), and also uniquifies them by id."""
+    def _comparator(x, y):
+        return cmp(y['id'], x['id'])
+    tweets = sorted(tweets, _comparator)
+    new_tweets = []
+    processed_ids = set()
+    for tweet in tweets:
+        if tweet['id'] not in processed_ids:
+            processed_ids.add(tweet['id'])
+            new_tweets.append(tweet)
+    return new_tweets
+
+def load_saved(path):
     try:
-        return json.load(open(FILE))
+        return json.load(open(path))
     except IOError:
         return []
 
-def normalize_url(url):
-    # Simple length heuristic
-    if len(url) < 10: return None
-
-    # Make sure we have some sort of protocol
-    if not re.search('://', url):
-        url = 'http://' + url
-
-    return url
-
-def lookup_short_urls(tweet):
-    # If short_urls are already there, skip
-    if 'short_urls' in tweet: return
-
-    # (Start of line or word)
-    # (Maybe something like http://)
-    # (A vaguely domain-like section, at least one dot which is not a double dot)
-    # (Whatever else follows, liberally via non-whitespace)
-    url_regex = '(\A|\\b)([\w-]+://)?\S+[.][^\s.]\S*'
-
-    redir = httplib2.Http(timeout=10)
-    redir.follow_redirects = False
-    redir.force_exception_to_status_code = True
-
-    short_urls = {}
-
-    new_text = tweet['text']
-    for sub in tweet['text'].split():
-        orig_url_match = re.search(url_regex, sub)
-        if not orig_url_match:
-            continue
-        orig_url = normalize_url(orig_url_match.group(0))
-        if not orig_url: continue
-
-        try:
-            response = redir.request(orig_url)[0]
-            if 'status' in response and response['status'] == '301':
-                short_urls[response['location']] = orig_url
-                new_text = new_text.replace(orig_url, response['location'])
-        except:
-            pass
-
-    tweet['short_urls'] = short_urls
-    tweet['text'] = new_text
-
-def fetch_and_save_new_tweets():
-    tweets = load_all()
-    old_tweet_ids = set(t['id'] for t in tweets)
+def fetch_new_tweets(tweets, base_url, params={}):
+    # Figure out the max id already imported
+    args = { 'count': 200 }
     if tweets:
-        since_id = max(t['id'] for t in tweets)
-    else:
-        since_id = None
-    new_tweets = fetch_all(since_id)
-    num_new_saved = 0
-    for tweet in new_tweets:
-        if tweet['id'] not in old_tweet_ids:
-            tweets.append(tweet)
-            num_new_saved += 1
-    tweets.sort(key = lambda t: t['id'], reverse=True)
-    # Delete the 'user' key, lookup short URLs
-    for t in tweets:
-        if 'user' in t:
-            del t['user']
-        lookup_short_urls(t)
-    # Save back to disk
-    json.dump(tweets, open(FILE, 'w'), indent = 2)
-    print "Saved %s new tweets" % num_new_saved
-
-def fetch_all(since_id = None):
-    all_tweets = []
+        args['since_id'] = max(i['id'] for i in tweets)
+    args.update(params)
+    
+    new_tweets = []
     seen_ids = set()
-    page = 0
-    args = {'count': 200}
-    if since_id is not None:
-        args['since_id'] = since_id
-
-    all_tweets_len = len(all_tweets)
-
+    page = 1
     while True:
         args['page'] = page
-        headers, body = h.request(
-            USER_TIMELINE + '?' + urllib.urlencode(args), method='GET'
-        )
-        page += 1
-        tweets = json.loads(body)
-        if 'error' in tweets:
-            raise ValueError, tweets
-        if not tweets:
+        url = base_url + '?' + urllib.urlencode(args)
+        try:
+            headers, response = h.request(url, method='GET')
+            response = json.loads(response)
+            assert 'error' not in response
+        except Exception:
+            print (url, headers, response)
+            raise
+        
+        if not response:
             break
-        for tweet in tweets:
-            if tweet['id'] not in seen_ids:
-                seen_ids.add(tweet['id'])
-                all_tweets.append(tweet)
-        #print "Fetched another %s" % (len(all_tweets) - all_tweets_len)
-        all_tweets_len = len(all_tweets)
-        time.sleep(2)
+        else:
+            for tweet in response:
+                if tweet['id'] not in seen_ids:
+                    new_tweets.append(tweet)
+                    seen_ids.add(tweet['id'])
+        page += 1
+    
+    tweets.extend(new_tweets)
+    return tweets, new_tweets
 
-    all_tweets.sort(key = lambda t: t['id'], reverse=True)
-    return all_tweets
+def save(tweets, path):
+    """Saves the tweets to the file path passed."""
+    tweets = sort_tweets(tweets)
+    json.dump(tweets, open(path, 'w'), indent=4)
+    return tweets
 
 if __name__ == '__main__':
-    fetch_and_save_new_tweets()
+    # First, update the user's own tweets
+    print 'Fetching own tweets'
+    tweets = load_saved(TWEET_FILE)
+    old_count = len(tweets)
+    tweets, added_tweets = fetch_new_tweets(
+        tweets,
+        'http://api.twitter.com/1/statuses/user_timeline.json'
+    )
+    tweets = save(tweets, TWEET_FILE)
+    new_count = len(tweets)
+    # Print some stats
+    print '--- Storing %d tweets in total' % new_count
+    print '--- Added %d tweets' % (new_count - old_count)
+    
+    # Now, the user's favourites
+    print 'Fetching faved tweets'
+    tweets = load_saved(FAVES_FILE)
+    old_count = len(tweets)
+    tweets, added_tweets = fetch_new_tweets(
+        tweets,
+        'http://api.twitter.com/1/favorites.json'
+    )
+    tweets = save(tweets, FAVES_FILE)
+    new_count = len(tweets)
+    print '--- Storing %d faves in total' % new_count
+    print '--- Added %d faves' % (new_count - old_count)
+    
+    # Finally, mentions
+    print 'Fetching mentions'
+    tweets = load_saved(REPLY_FILE)
+    old_count = len(tweets)
+    tweets, added_tweets = fetch_new_tweets(
+        tweets,
+        'http://api.twitter.com/1/statuses/mentions.json'
+    )
+    tweets = save(tweets, REPLY_FILE)
+    new_count = len(tweets)
+    print '--- Storing %d mentions in total' % new_cound
+    print '--- Added %d mentions' % (new_count - old_count)
