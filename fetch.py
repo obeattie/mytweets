@@ -13,7 +13,7 @@ TWEET_FILE = 'my_tweets.json'
 FAVES_FILE = 'my_faves.json'
 REPLY_FILE = 'my_mentions.json'
 
-# Configure httplib with the credentials
+# Configure an oauth client with the credentials
 oauth_consumer = oauth.Consumer(
     key=CONSUMER_KEY,
     secret=CONSUMER_SECRET
