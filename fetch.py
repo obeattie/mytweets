@@ -1,6 +1,6 @@
-import urllib
-
 import oauth2 as oauth
+import time
+import urllib
 
 try:
     import json
@@ -44,6 +44,27 @@ def load_saved(path):
     except IOError:
         return []
 
+def _fetch_url(url, *args, **kwargs):
+    """Fetch a url from Twitter, returning the decoded JSON. Proxies arguments to the HTTP
+       client."""
+    headers = {}
+    
+    try:
+        headers, response = h.request(url, *args, **kwargs)
+        return json.loads(response)
+    except Exception:
+        # If Twitter's behaving badly, try again in 5 seconds
+        if headers.get('status', None) in ('502', '503'):
+            print '    !! Twitter returned a %s for %s. Backing off for 5s and retrying.' % (
+                headers['status'],
+                url
+            )
+            time.sleep(5)
+            print '    ...going again'
+            return _fetch_url(url, *args, **kwargs)
+        else:
+            raise
+
 def fetch_new_tweets(tweets, base_url, params={}):
     # Figure out the max id already imported
     args = { 'count': 200 }
@@ -57,13 +78,8 @@ def fetch_new_tweets(tweets, base_url, params={}):
     while True:
         args['page'] = page
         url = base_url + '?' + urllib.urlencode(args)
-        try:
-            headers, response = h.request(url, method='GET')
-            response = json.loads(response)
-            assert 'error' not in response
-        except Exception:
-            print (url, headers, response)
-            raise
+        
+        response = _fetch_url(url, method='GET')
         
         if not response:
             break
@@ -89,8 +105,12 @@ if __name__ == '__main__':
     tweets = load_saved(TWEET_FILE)
     old_count = len(tweets)
     tweets, added_tweets = fetch_new_tweets(
-        tweets,
-        'http://api.twitter.com/1/statuses/user_timeline.json'
+        tweets=tweets,
+        base_url='http://api.twitter.com/1/statuses/user_timeline.json',
+        params={
+            'include_entities': '1',
+            'include_rts': '1'
+        }
     )
     tweets = save(tweets, TWEET_FILE)
     new_count = len(tweets)
@@ -103,8 +123,11 @@ if __name__ == '__main__':
     tweets = load_saved(FAVES_FILE)
     old_count = len(tweets)
     tweets, added_tweets = fetch_new_tweets(
-        tweets,
-        'http://api.twitter.com/1/favorites.json'
+        tweets=tweets,
+        base_url='http://api.twitter.com/1/favorites.json',
+        params={
+            'include_entities': '1'
+        }
     )
     tweets = save(tweets, FAVES_FILE)
     new_count = len(tweets)
@@ -116,10 +139,14 @@ if __name__ == '__main__':
     tweets = load_saved(REPLY_FILE)
     old_count = len(tweets)
     tweets, added_tweets = fetch_new_tweets(
-        tweets,
-        'http://api.twitter.com/1/statuses/mentions.json'
+        tweets=tweets,
+        base_url='http://api.twitter.com/1/statuses/mentions.json',
+        params={
+            'include_entities': '1',
+            'include_rts': '1'
+        }
     )
     tweets = save(tweets, REPLY_FILE)
     new_count = len(tweets)
-    print '--- Storing %d mentions in total' % new_cound
+    print '--- Storing %d mentions in total' % new_count
     print '--- Added %d mentions' % (new_count - old_count)
