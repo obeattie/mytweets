@@ -1,7 +1,8 @@
 mytweets
 ========
 
-A simple script to back up all of your tweets in to a local JSON file.
+A simple script to backup all your tweets, faves and mentions from Twitter into local JSON
+files.
 
 Dependencies
 ------------
